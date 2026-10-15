@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Timers Sequenciais + Buffer</title>
+  <meta name="description" content="Timers sequenciais com buffer geral e sessões sincronizadas em tempo real.">
+  <meta name="theme-color" content="#0f172a">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='26' fill='none' stroke='%23273449' stroke-width='9'/%3E%3Cpath d='M32 6 A26 26 0 1 1 9.5 45' fill='none' stroke='%2322c55e' stroke-width='9' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- ============================ HOME ============================ -->
+<section id="home" class="home" hidden>
+  <div class="home-card">
+    <div class="home-logo">
+      <svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="26" fill="none" stroke="#273449" stroke-width="8"/><path d="M32 6 A26 26 0 1 1 9.5 45" fill="none" stroke="#22c55e" stroke-width="8" stroke-linecap="round"/></svg>
+      <div>
+        <h1>Timers</h1>
+        <p>Sequenciais + Buffer</p>
+      </div>
+    </div>
+    <p class="lead">Defina vários timers e um buffer geral. Quando um timer passa do tempo, o excedente sai do buffer. Compartilhe a sessão e todos veem o mesmo relógio em tempo real.</p>
+
+    <label class="field">
+      <span>Seu nome</span>
+      <input id="homeName" maxlength="24" placeholder="Ex.: Guilherme" autocomplete="nickname">
+    </label>
+
+    <button id="btnCreate" class="btn green block lg">＋ Criar sessão compartilhada</button>
+
+    <div class="or"><span>ou entre numa sessão existente</span></div>
+    <form id="joinForm" class="join-row">
+      <input id="joinCode" placeholder="Código ou link da sessão" maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button class="btn blue" type="submit">Entrar</button>
+    </form>
+
+    <button id="btnLocal" class="btn ghost block">Usar sozinho, sem sincronia</button>
+
+    <p class="fine">A sincronia usa servidores MQTT públicos e gratuitos. Qualquer pessoa com o código pode ver e controlar a sessão, então não coloque informações sensíveis nos nomes.</p>
+  </div>
+</section>
+
+<!-- ============================ APP ============================ -->
+<div id="app" hidden>
+  <header class="topbar">
+    <button id="btnConfigToggle" class="icon-btn only-mobile" aria-label="Configuração">⚙</button>
+    <div class="brand">
+      <svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="26" fill="none" stroke="#273449" stroke-width="9"/><path d="M32 6 A26 26 0 1 1 9.5 45" fill="none" stroke="#22c55e" stroke-width="9" stroke-linecap="round"/></svg>
+      <b>Timers</b>
+    </div>
+
+    <div id="sessionBox" class="session-box">
+      <span class="sess-label">SESSÃO</span>
+      <code id="sessCode"></code>
+      <button id="btnCopy" class="chip-btn" title="Copiar link de convite">🔗<span class="lbl"> Convidar</span></button>
+    </div>
+
+    <div id="netStatus" class="net" title=""><i></i><span></span></div>
+    <div class="spacer"></div>
+    <div id="peers" class="peers"></div>
+    <button id="btnSound" class="icon-btn" title="Som dos alertas" aria-label="Som dos alertas">🔔</button>
+    <button id="btnLeave" class="icon-btn text" title="Sair da sessão">Sair</button>
+  </header>
+
+  <div id="scrim" class="scrim"></div>
+
+  <main class="layout">
+    <!-- ---------- CONFIG ---------- -->
+    <aside id="config" class="config">
+      <div class="config-head">
+        <h2>⚙ Configuração</h2>
+        <button class="icon-btn only-mobile" id="btnConfigClose" aria-label="Fechar">✕</button>
+      </div>
+
+      <label class="field">
+        <span>Nome da sessão</span>
+        <input id="cfgTitle" maxlength="40" placeholder="Ex.: Reunião de planejamento">
+      </label>
+
+      <div>
+        <div class="section-title">Timers <small>min · ex.: 20 · 7,5 · 12:30</small></div>
+        <div id="rows" class="rows"></div>
+        <button id="btnAdd" class="btn blue block">＋ Adicionar timer</button>
+      </div>
+
+      <div class="buffer-field">
+        <span>◆ Buffer geral <small>(min)</small></span>
+        <input id="cfgBuffer" inputmode="decimal">
+      </div>
+
+      <label class="check">
+        <input type="checkbox" id="cfgGiveback">
+        <span>Sobra de um timer encerrado antes do tempo volta para o buffer</span>
+      </label>
+      <label class="check" id="hostOnlyRow">
+        <input type="checkbox" id="cfgHostOnly">
+        <span>Somente o anfitrião (👑) controla a sessão</span>
+      </label>
+
+      <div id="cfgSummary" class="summary"></div>
+      <div id="cfgLockNote" class="lock-note" hidden></div>
+      <p class="shortcuts">Atalhos: <kbd>Espaço</kbd> Play/Pausar · <kbd>N</kbd> Próximo · <kbd>R</kbd> Reiniciar</p>
+    </aside>
+
+    <!-- ---------- DASHBOARD ---------- -->
+    <section class="dash">
+      <div id="banner" class="banner" hidden></div>
+
+      <div class="hero">
+        <div class="ring-wrap">
+          <svg id="ring" viewBox="0 0 360 360" role="img" aria-label="Tempo restante">
+            <circle id="ringFlash" cx="180" cy="180" r="176" />
+            <circle id="ringTrack" cx="180" cy="180" r="150" />
+            <circle id="ringArc" cx="180" cy="180" r="150" transform="rotate(-90 180 180)" />
+            <circle id="ringKnob" cx="180" cy="30" r="15" />
+            <text id="ringTop" x="180" y="100"></text>
+            <circle id="ringDot" cx="180" cy="122" r="6" />
+            <text id="ringMain" x="180" y="200"></text>
+            <text id="ringSub" x="180" y="244"></text>
+          </svg>
+        </div>
+
+        <div class="info">
+          <div id="step" class="step"></div>
+          <div id="curName" class="cur-name"></div>
+          <div id="stateLine" class="state-line"></div>
+          <div id="nextLine" class="next-line"></div>
+
+          <div class="cards">
+            <div class="card"><span>DECORRIDO</span><b id="cElapsed">--</b></div>
+            <div class="card"><span>FIM PREVISTO</span><b id="cEnd">--</b></div>
+            <div class="card"><span>LIMITE C/ BUFFER</span><b id="cLimit">--</b></div>
+          </div>
+
+          <div class="controls">
+            <button id="btnPlay" class="btn big green">▶ Play</button>
+            <button id="btnNext" class="btn big blue">⏭ Próximo</button>
+            <button id="btnReset" class="btn big slate">⟲ Reiniciar</button>
+          </div>
+          <div id="toast" class="toast" role="status" aria-live="polite"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="row-head">
+          <span class="amber">◆ BUFFER GERAL</span>
+          <b id="bufText"></b>
+        </div>
+        <div id="bufBar" class="bar">
+          <div id="bufFill" class="fill"></div>
+          <span id="bufPct" class="pct"></span>
+          <span id="bufMsg" class="bar-msg"></span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="row-head"><span class="muted">LINHA DO TEMPO</span></div>
+        <div id="timeline" class="timeline"></div>
+      </div>
+
+      <div class="panel">
+        <div id="table" class="table"></div>
+      </div>
+
+      <footer class="foot">
+        <span>Timers Sequenciais + Buffer</span>
+        <a href="https://github.com/" id="repoLink" target="_blank" rel="noopener">código-fonte</a>
+      </footer>
+    </section>
+  </main>
+</div>
+
+<script src="vendor/mqtt.min.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
