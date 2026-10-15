@@ -338,6 +338,7 @@
   const now = () => Date.now() + App.clockOffset;
   window.__tt = { // usado nos testes automatizados
     App, Model, parseDuration, fmt,
+    get Pip() { return Pip; },
     inject(st) { App.state = st; persist(); if (App.sync) App.sync.publish(st); renderAll(); },
   };
 
@@ -378,6 +379,7 @@
     App.mode = null;
   }
   function showHome() {
+    if (Pip.mode) Pip.close();
     $('#app').hidden = true;
     $('#home').hidden = false;
     $('#homeName').value = App.name;
@@ -647,58 +649,78 @@
     renderTimeline(d);
     renderTable(d);
     renderBanner();
+    Pip.render(d, t);
     if (App.toastUntil && t > App.toastUntil) { $('#toast').textContent = ''; App.toastUntil = 0; }
     Wake.want(d.running);
+  }
+
+  // Valores visuais do anel (usados pela tela principal e pelo PiP)
+  function ringModel(d, t) {
+    const blink = Math.floor(t / 500) % 2 === 0;
+    const m = { frac: 0, color: C.green, main: '--:--', mainColor: C.muted, sub: '', subColor: C.muted,
+      top: '', topColor: C.amber, knob: false, track: '', dot: 'transparent', icon: false,
+      name: '', nameColor: C.fg, step: '', state: '', stateColor: C.muted };
+    if (d.finished) {
+      Object.assign(m, { frac: 1, color: C.green, main: '✔', mainColor: C.green, icon: true,
+        top: 'CONCLUÍDO', topColor: C.green, sub: `total ${fmt(d.totalElapsed)}`,
+        name: 'Concluído', nameColor: C.green, step: 'SESSÃO CONCLUÍDA',
+        state: d.left >= 0 ? `Buffer restante ${fmt(d.left)}` : `Excedeu ${fmt(-d.left)}`,
+        stateColor: d.left >= 0 ? C.green : C.red });
+      return m;
+    }
+    const c = d.cur;
+    m.dot = m.nameColor = PALETTE[c.i % PALETTE.length];
+    m.name = c.name;
+    m.step = `TIMER ${d.index + 1} DE ${d.n}`;
+    if (c.overtime > 0) {
+      m.track = '#3b1d24';
+      m.frac = d.cap > 0 ? Math.max(0, d.left) / d.cap : 0;
+      m.color = blink || !d.running ? C.red : C.orange;
+      m.main = '+' + fmt(c.overtime); m.mainColor = C.red;
+      m.sub = d.left < 0 ? 'BUFFER ESTOURADO' : d.running ? 'consumindo buffer' : 'em overtime';
+      m.subColor = d.left >= 0 ? C.amber : C.red;
+    } else {
+      m.frac = c.remaining / c.dur;
+      m.color = colorFor(m.frac);
+      m.main = fmt(ceilS(c.remaining)); m.mainColor = m.color;
+      m.sub = `de ${fmt(c.dur)}`;
+      m.knob = m.frac > 0.002;
+    }
+    if (!d.running) m.top = d.started ? '⏸ PAUSADO' : 'PRONTO';
+    if (!d.started) { m.state = 'Pronto para começar'; m.stateColor = C.muted; }
+    else if (!d.running) { m.state = c.overtime > 0 ? 'Pausado em overtime' : 'Pausado'; m.stateColor = C.amber; }
+    else if (c.overtime > 0 && d.left < 0) { m.state = `Buffer estourado em ${fmt(-d.left)}`; m.stateColor = C.red; }
+    else if (c.overtime > 0) { m.state = 'Consumindo o buffer'; m.stateColor = C.red; }
+    else if (d.running) { m.state = 'Em andamento'; m.stateColor = C.green; }
+    else { m.state = 'Pausado'; m.stateColor = C.amber; }
+    return m;
   }
 
   function renderRing(d, t) {
     const blink = Math.floor(t / 500) % 2 === 0;
     $('#ringFlash').style.opacity = t < App.flashUntil && blink ? 0.18 : 0;
-    let frac = 0, color = C.green, main = '--:--', mainColor = C.muted, sub = '', subColor = C.muted;
-    let top = '', topColor = C.amber, knob = false, track = '', dot = 'transparent', mainCls = '';
-    if (d.finished) {
-      frac = 1; color = C.green; main = '✔'; mainColor = C.green; mainCls = 'icon';
-      top = 'CONCLUÍDO'; topColor = C.green; sub = `total ${fmt(d.totalElapsed)}`;
-    } else {
-      const c = d.cur;
-      dot = PALETTE[c.i % PALETTE.length];
-      if (c.overtime > 0) {
-        track = '#3b1d24';
-        frac = d.cap > 0 ? Math.max(0, d.left) / d.cap : 0;
-        color = blink || !d.running ? C.red : C.orange;
-        main = '+' + fmt(c.overtime); mainColor = C.red;
-        sub = d.left >= 0 ? 'consumindo buffer' : 'BUFFER ESTOURADO';
-        subColor = d.left >= 0 ? C.amber : C.red;
-      } else {
-        frac = c.remaining / c.dur;
-        color = colorFor(frac);
-        main = fmt(ceilS(c.remaining)); mainColor = color;
-        sub = `de ${fmt(c.dur)}`;
-        knob = frac > 0.002;
-      }
-      if (!d.running) top = d.started ? '⏸ PAUSADO' : 'PRONTO';
-    }
+    const m = ringModel(d, t);
     const arc = $('#ringArc');
-    arc.style.stroke = color;
-    arc.style.opacity = frac > 0.002 ? 1 : 0;
-    arc.setAttribute('stroke-dasharray', `${(CIRC * Math.min(1, frac)).toFixed(2)} ${CIRC.toFixed(2)}`);
-    $('#ringTrack').style.stroke = track;
+    arc.style.stroke = m.color;
+    arc.style.opacity = m.frac > 0.002 ? 1 : 0;
+    arc.setAttribute('stroke-dasharray', `${(CIRC * Math.min(1, m.frac)).toFixed(2)} ${CIRC.toFixed(2)}`);
+    $('#ringTrack').style.stroke = m.track;
     const kn = $('#ringKnob');
-    kn.style.display = knob ? '' : 'none';
-    if (knob) {
-      const a = (-90 + 360 * frac) * Math.PI / 180;
+    kn.style.display = m.knob ? '' : 'none';
+    if (m.knob) {
+      const a = (-90 + 360 * m.frac) * Math.PI / 180;
       kn.setAttribute('cx', (180 + R * Math.cos(a)).toFixed(2));
       kn.setAttribute('cy', (180 + R * Math.sin(a)).toFixed(2));
     }
-    const m = $('#ringMain');
-    m.textContent = main;
-    m.style.fill = mainColor;
-    m.setAttribute('class', mainCls || (main.length > 6 ? 'long' : ''));
-    $('#ringSub').textContent = sub;
-    $('#ringSub').style.fill = subColor;
-    $('#ringTop').textContent = top;
-    $('#ringTop').style.fill = topColor;
-    $('#ringDot').style.fill = dot;
+    const mainEl = $('#ringMain');
+    mainEl.textContent = m.main;
+    mainEl.style.fill = m.mainColor;
+    mainEl.setAttribute('class', m.icon ? 'icon' : (m.main.length > 6 ? 'long' : ''));
+    $('#ringSub').textContent = m.sub;
+    $('#ringSub').style.fill = m.subColor;
+    $('#ringTop').textContent = m.top;
+    $('#ringTop').style.fill = m.topColor;
+    $('#ringDot').style.fill = m.dot;
   }
 
   function renderInfo(d, t) {
@@ -727,6 +749,7 @@
       $('#curName').textContent = c.name;
       $('#curName').style.color = PALETTE[c.i % PALETTE.length];
       if (!d.started) setState('Pressione ▶ Play para começar', C.muted);
+      else if (!d.running) setState(c.overtime > 0 ? '⏸ Pausado em overtime' : '⏸ Pausado', C.amber);
       else if (c.overtime > 0 && d.left < 0) setState(`⚠ Buffer estourado em ${fmt(-d.left)}`, C.red);
       else if (c.overtime > 0) setState('⏰ Tempo esgotado: consumindo o buffer', C.red);
       else if (d.running) setState('▶ Em andamento', C.green);
@@ -846,6 +869,306 @@
     b.hidden = !msg;
   }
 
+
+  // --------------------------------------------------------------------- PiP
+  // Chrome/Edge desktop: Document Picture-in-Picture (mini-página com botões).
+  // Demais (Safari, iOS, Android): vídeo gerado de um canvas + Media Session.
+  const PIP_R = 84;
+  const PIP_CIRC = 2 * Math.PI * PIP_R;
+  const PIP_CSS = `
+    *{box-sizing:border-box}
+    html,body{margin:0;height:100%;background:#0f172a;color:#e2e8f0;overflow:hidden;
+      font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+    body{display:flex;flex-direction:column;gap:8px;padding:12px;transition:background .2s}
+    body.flash{background:#3b1d24}
+    .hd{text-align:center;min-width:0}
+    #pStep{font-size:11px;font-weight:800;letter-spacing:.08em;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #pName{font-size:20px;font-weight:800;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    svg{flex:1;min-height:0;width:100%;overflow:visible}
+    svg text{text-anchor:middle;font-variant-numeric:tabular-nums}
+    #pTrk{fill:none;stroke-width:16;transition:stroke .3s}
+    #pArc{fill:none;stroke-width:16;stroke-linecap:round;transition:stroke-dasharray .25s linear,stroke .3s}
+    #pMain{font-size:40px;font-weight:800}
+    #pMain.long{font-size:31px}
+    #pMain.icon{font-size:48px}
+    #pSub{font-size:12px;font-weight:700}
+    #pTop{font-size:11px;font-weight:800;letter-spacing:.06em}
+    #pState{text-align:center;font-size:13px;font-weight:700;min-height:16px}
+    .bar{position:relative;height:22px;flex:none;border-radius:7px;background:#273449;overflow:hidden}
+    .bar.over{background:repeating-linear-gradient(135deg,#ef4444 0 10px,#b91c1c 10px 20px)}
+    #pFill{position:absolute;inset:0 auto 0 0;border-radius:7px;transition:width .25s linear}
+    #pBuf{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+      font-size:12px;font-weight:800;color:#fff;text-shadow:0 1px 2px #0009;font-variant-numeric:tabular-nums}
+    .btns{display:flex;gap:8px;flex:none}
+    button{flex:1;border:0;border-radius:9px;padding:10px 6px;color:#fff;cursor:pointer;
+      font-family:inherit;font-size:14px;font-weight:700;white-space:nowrap}
+    button:hover:not(:disabled){filter:brightness(1.12)}
+    button:disabled{background:#475569!important;color:#94a3b8;cursor:not-allowed}
+    .g{background:#22c55e}.a{background:#f59e0b}.b{background:#3b82f6}
+    @media (max-height:300px){#pStep,#pState{display:none}#pName{font-size:16px}}
+    @media (max-height:200px){.bar{display:none}}
+  `;
+  const PIP_HTML = `
+    <div class="hd"><div id="pStep"></div><div id="pName"></div></div>
+    <svg viewBox="0 0 200 200" aria-label="Tempo restante">
+      <circle id="pTrk" cx="100" cy="100" r="${PIP_R}"/>
+      <circle id="pArc" cx="100" cy="100" r="${PIP_R}" transform="rotate(-90 100 100)"/>
+      <text id="pTop" x="100" y="68"></text>
+      <text id="pMain" x="100" y="114"></text>
+      <text id="pSub" x="100" y="141"></text>
+    </svg>
+    <div id="pState"></div>
+    <div class="bar" id="pBar"><div id="pFill"></div><span id="pBuf"></span></div>
+    <div class="btns"><button id="pPlay" class="g"></button><button id="pNext" class="b"></button></div>`;
+
+  function bufferLabel(d) {
+    if (d.left < 0) return { text: `Buffer estourado +${fmt(-d.left)}`, frac: 0, over: true };
+    if (d.cap <= 0) return { text: 'Sem buffer', frac: 0, over: false };
+    return { text: `Buffer ${fmt(ceilS(d.left))}`, frac: d.left / d.cap, over: false };
+  }
+
+  const Pip = {
+    mode: null, win: null, els: null, video: null, canvas: null, ctx: null, lastMeta: '',
+    hasDoc() { return 'documentPictureInPicture' in window; },
+    hasVideo() {
+      const v = document.createElement('video');
+      const canvasOk = typeof HTMLCanvasElement.prototype.captureStream === 'function';
+      return canvasOk && ((document.pictureInPictureEnabled && typeof v.requestPictureInPicture === 'function')
+        || typeof v.webkitSetPresentationMode === 'function');
+    },
+    supported() { return this.hasDoc() || this.hasVideo(); },
+
+    async toggle() {
+      if (this.mode) { this.close(); return; }
+      try {
+        if (this.hasDoc()) await this.openDoc();
+        else await this.openVideo();
+      } catch (e) {
+        console.warn('PiP', e);
+        toast('Não foi possível abrir a janela flutuante neste navegador', C.amber);
+      }
+      renderPipButton();
+    },
+
+    // ---- Document PiP
+    async openDoc() {
+      const w = await window.documentPictureInPicture.requestWindow({ width: 300, height: 400 });
+      this.mount(w);
+      this.mode = 'doc';
+      w.addEventListener('pagehide', () => {
+        if (this.win === w) { this.win = null; this.els = null; this.mode = null; renderPipButton(); }
+      });
+    },
+    mount(w) { // separado para poder ser testado com uma janela comum
+      const doc = w.document;
+      doc.title = 'Timers';
+      const st = doc.createElement('style');
+      st.textContent = PIP_CSS;
+      doc.head.appendChild(st);
+      doc.body.innerHTML = PIP_HTML;
+      const q = (id) => doc.getElementById(id);
+      this.els = { step: q('pStep'), name: q('pName'), arc: q('pArc'), trk: q('pTrk'), main: q('pMain'), sub: q('pSub'),
+        top: q('pTop'), state: q('pState'), bar: q('pBar'), fill: q('pFill'), buf: q('pBuf'), play: q('pPlay'), next: q('pNext') };
+      this.els.play.addEventListener('click', togglePlay);
+      this.els.next.addEventListener('click', () => commit({ type: 'next' }));
+      doc.addEventListener('pointerdown', () => Sound.unlock());
+      doc.addEventListener('keydown', (e) => {
+        const k = e.key.toLowerCase();
+        if (k === ' ') { e.preventDefault(); togglePlay(); }
+        else if (k === 'n') commit({ type: 'next' });
+        else if (k === 'p' || k === 'escape') this.close();
+      });
+      // A janela PiP fica visível, então o relógio dela não sofre throttling
+      // quando a aba principal está em segundo plano.
+      w.setInterval(renderDash, 250);
+      this.win = w;
+      renderDash();
+    },
+    renderDoc(d, t) {
+      const e = this.els, m = ringModel(d, t);
+      const title = App.state.config.title;
+      e.step.textContent = (title ? title + ' · ' : '') + m.step;
+      e.name.textContent = m.name;
+      e.name.style.color = m.nameColor;
+      e.trk.style.stroke = m.track || '#273449';
+      e.arc.style.stroke = m.color;
+      e.arc.style.opacity = m.frac > 0.002 ? 1 : 0;
+      e.arc.setAttribute('stroke-dasharray', `${(PIP_CIRC * Math.min(1, m.frac)).toFixed(2)} ${PIP_CIRC.toFixed(2)}`);
+      e.main.textContent = m.main;
+      e.main.style.fill = m.mainColor;
+      e.main.setAttribute('class', m.icon ? 'icon' : (m.main.length > 6 ? 'long' : ''));
+      e.sub.textContent = m.sub;
+      e.sub.style.fill = m.subColor;
+      e.top.textContent = m.top;
+      e.top.style.fill = m.topColor;
+      e.state.textContent = m.state;
+      e.state.style.color = m.stateColor;
+      const b = bufferLabel(d);
+      e.bar.classList.toggle('over', b.over);
+      e.fill.style.width = `${(b.frac * 100).toFixed(2)}%`;
+      e.fill.style.background = colorFor(b.frac);
+      e.buf.textContent = b.text;
+      const ctl = canControl();
+      e.play.textContent = d.running ? '⏸ Pausar' : (d.started && !d.finished ? '▶ Retomar' : '▶ Play');
+      e.play.className = d.running ? 'a' : 'g';
+      e.play.disabled = d.finished || !ctl;
+      e.next.textContent = !d.finished && d.index === d.n - 1 ? '✔ Finalizar' : '⏭ Próximo';
+      e.next.disabled = !ctl || !d.started || d.finished;
+      e.play.title = ctl ? 'Espaço' : 'Somente o anfitrião controla';
+      this.win.document.body.classList.toggle('flash', t < App.flashUntil && Math.floor(t / 500) % 2 === 0);
+      this.win.document.title = `${m.main} · ${m.name}`;
+    },
+
+    // ---- Video PiP (fallback)
+    prepareVideo(force) {
+      if (this.video || (!force && (this.hasDoc() || !this.hasVideo()))) return;
+      const cv = document.createElement('canvas');
+      cv.width = 640; cv.height = 360;
+      const v = document.createElement('video');
+      v.muted = true; v.playsInline = true; v.autoplay = true;
+      v.setAttribute('playsinline', ''); v.setAttribute('muted', '');
+      v.className = 'pip-video';
+      v.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(v);
+      this.canvas = cv; this.ctx = cv.getContext('2d'); this.video = v;
+      this.draw(App.state ? Model.derive(App.state, now()) : null, now());
+      if (cv.captureStream) { v.srcObject = cv.captureStream(8); v.play().catch(() => {}); }
+      v.addEventListener('enterpictureinpicture', () => { this.mode = 'video'; renderPipButton(); });
+      v.addEventListener('leavepictureinpicture', () => { this.mode = null; renderPipButton(); });
+      v.addEventListener('webkitpresentationmodechanged', () => {
+        this.mode = v.webkitPresentationMode === 'picture-in-picture' ? 'video' : null;
+        renderPipButton();
+      });
+      // os botões da janela de vídeo controlam o relógio, não o vídeo
+      v.addEventListener('pause', () => { if (this.mode === 'video') v.play().catch(() => {}); });
+      if ('mediaSession' in navigator) {
+        const set = (a, f) => { try { navigator.mediaSession.setActionHandler(a, f); } catch (e) { /* ação não suportada */ } };
+        set('play', () => { if (!App.state.run.running) togglePlay(); });
+        set('pause', () => { if (App.state.run.running) togglePlay(); });
+        set('nexttrack', () => commit({ type: 'next' }));
+      }
+    },
+    async openVideo() {
+      this.prepareVideo();
+      const v = this.video;
+      if (!v) throw new Error('Picture-in-Picture não suportado');
+      this.draw(Model.derive(App.state, now()), now());
+      if (v.requestPictureInPicture && document.pictureInPictureEnabled) {
+        if (v.paused) await v.play();
+        await v.requestPictureInPicture();
+      } else {
+        v.webkitSetPresentationMode('picture-in-picture');
+      }
+      this.mode = 'video';
+    },
+    draw(d, t) {
+      const g = this.ctx, W = 640, H = 360;
+      if (!g) return;
+      const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif';
+      const flash = d && t < App.flashUntil && Math.floor(t / 500) % 2 === 0;
+      g.fillStyle = flash ? '#3b1d24' : '#0f172a';
+      g.fillRect(0, 0, W, H);
+      g.textBaseline = 'middle';
+      if (!d) {
+        g.fillStyle = C.muted; g.textAlign = 'center'; g.font = `800 34px ${FONT}`;
+        g.fillText('Timers', W / 2, H / 2);
+        return;
+      }
+      const m = ringModel(d, t);
+      const cx = 178, cy = 180, r = 128;
+      g.lineCap = 'round'; g.lineWidth = 22;
+      g.strokeStyle = m.track || '#273449';
+      g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.stroke();
+      if (m.frac > 0.002) {
+        g.strokeStyle = m.color;
+        g.beginPath(); g.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.min(1, m.frac)); g.stroke();
+      }
+      g.textAlign = 'center';
+      g.fillStyle = m.mainColor;
+      g.font = `800 ${m.icon ? 76 : m.main.length > 6 ? 48 : 62}px ${FONT}`;
+      g.fillText(m.main, cx, cy + 4);
+      g.fillStyle = m.subColor; g.font = `700 18px ${FONT}`;
+      g.fillText(m.sub, cx, cy + 52);
+      if (m.top) { g.fillStyle = m.topColor; g.font = `800 15px ${FONT}`; g.fillText(m.top, cx, cy - 56); }
+
+      const x = 340, w = 272;
+      const fit = (txt, font) => {
+        g.font = font;
+        if (g.measureText(txt).width <= w) return txt;
+        let s2 = txt;
+        while (s2.length > 1 && g.measureText(s2 + '…').width > w) s2 = s2.slice(0, -1);
+        return s2 + '…';
+      };
+      g.textAlign = 'left';
+      const title = App.state.config.title;
+      g.fillStyle = C.muted; g.fillText(fit((title ? title.toUpperCase() + ' · ' : '') + m.step, `800 15px ${FONT}`), x, 62);
+      g.fillStyle = m.nameColor; g.fillText(fit(m.name, `800 36px ${FONT}`), x, 102);
+      g.fillStyle = m.stateColor; g.fillText(fit(m.state, `700 21px ${FONT}`), x, 146);
+
+      const b = bufferLabel(d);
+      g.fillStyle = C.amber; g.font = `800 15px ${FONT}`; g.fillText('◆ BUFFER GERAL', x, 204);
+      const by = 222, bh = 34;
+      const rr = (x0, y0, ww, hh, rad, fill) => {
+        g.fillStyle = fill; g.beginPath();
+        if (g.roundRect) g.roundRect(x0, y0, ww, hh, rad); else g.rect(x0, y0, ww, hh);
+        g.fill();
+      };
+      rr(x, by, w, bh, 9, b.over ? C.red : '#273449');
+      if (b.frac > 0) rr(x, by, Math.max(18, w * b.frac), bh, 9, colorFor(b.frac));
+      g.fillStyle = '#fff'; g.font = `800 15px ${FONT}`; g.textAlign = 'center';
+      g.fillText(b.text, x + w / 2, by + bh / 2 + 1);
+      g.textAlign = 'left';
+      let nextTxt = '';
+      if (!d.finished) nextTxt = d.index + 1 < d.n ? `A seguir: ${d.timers[d.index + 1].name}` : 'Último timer';
+      g.fillStyle = C.muted; g.fillText(fit(nextTxt, `600 17px ${FONT}`), x, 296);
+    },
+
+    render(d, t) {
+      if (this.mode === 'doc' && this.els) this.renderDoc(d, t);
+      if (this.mode === 'video' && this.ctx) {
+        this.draw(d, t);
+        if ('mediaSession' in navigator) {
+          const ms = navigator.mediaSession;
+          const meta = d.finished ? 'Concluído' : d.cur.name;
+          if (meta !== this.lastMeta && window.MediaMetadata) {
+            this.lastMeta = meta;
+            try { ms.metadata = new MediaMetadata({ title: meta, artist: 'Timers', album: App.state.config.title || '' }); } catch (e) { /* noop */ }
+          }
+          try { ms.playbackState = d.running ? 'playing' : 'paused'; } catch (e) { /* noop */ }
+        }
+      }
+    },
+    close() {
+      if (this.mode === 'doc' && this.win) { try { this.win.close(); } catch (e) { /* noop */ } }
+      else if (this.mode === 'video') {
+        if (document.pictureInPictureElement && document.exitPictureInPicture) document.exitPictureInPicture().catch(() => {});
+        else if (this.video && this.video.webkitSetPresentationMode) { try { this.video.webkitSetPresentationMode('inline'); } catch (e) { /* noop */ } }
+      }
+      this.mode = null; this.win = null; this.els = null;
+      renderPipButton();
+    },
+  };
+
+  function renderPipButton() {
+    const b = $('#btnPip');
+    if (!b) return;
+    b.hidden = !Pip.supported();
+    b.classList.toggle('active', !!Pip.mode);
+    b.title = Pip.mode ? 'Fechar janela flutuante (P)' : 'Abrir janela flutuante, Picture-in-Picture (P)';
+  }
+
+  // Relógio de atualização: um Worker não sofre o throttling de timers que o
+  // navegador aplica a abas em segundo plano (alertas e PiP seguem em dia).
+  function startTicker(fn, ms) {
+    try {
+      const url = URL.createObjectURL(new Blob([`setInterval(function(){postMessage(0)},${ms})`], { type: 'text/javascript' }));
+      const w = new Worker(url);
+      w.onmessage = fn;
+      return;
+    } catch (e) { /* sem Worker */ }
+    setInterval(fn, ms);
+  }
+
   // ------------------------------------------------------------------ alerts
   function toast(msg, color = C.red, secs = 4) {
     const el = $('#toast');
@@ -939,6 +1262,7 @@
       renderTop();
     });
     $('#btnLeave').addEventListener('click', () => { location.hash = ''; });
+    $('#btnPip').addEventListener('click', () => Pip.toggle());
     $('#peers').addEventListener('click', (e) => {
       if (!e.target.closest('.avatar.me')) return;
       const v = window.prompt('Seu nome nesta sessão:', App.name);
@@ -972,6 +1296,7 @@
       if (k === ' ' || k === 'spacebar') { e.preventDefault(); togglePlay(); }
       else if (k === 'n') commit({ type: 'next' });
       else if (k === 'r') doReset();
+      else if (k === 'p') Pip.toggle();
     });
 
     window.addEventListener('hashchange', route);
@@ -1002,6 +1327,8 @@
   repoLink();
   syncClock();
   route();
-  setInterval(renderDash, 200);
+  renderPipButton();
+  Pip.prepareVideo();
+  startTicker(renderDash, 200);
   setInterval(() => { if (App.mode === 'session') renderPeers(); }, 10000);
 })();

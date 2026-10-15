@@ -17,6 +17,7 @@ Também dá para **usar sozinho**, sem sincronia. Nesse modo o estado fica salvo
 | `Espaço` | Play / Pausar |
 | `N` | Próximo |
 | `R` | Reiniciar |
+| `P` | Abrir/fechar janela flutuante (PiP) |
 
 ### Recursos
 - Anel de progresso com cores (verde → âmbar → laranja → vermelho no overtime)
@@ -26,6 +27,10 @@ Também dá para **usar sozinho**, sem sincronia. Nesse modo o estado fica salvo
 - Presença: avatares de quem está na sessão; 👑 marca o anfitrião
 - Opção **"Somente o anfitrião controla"** para os demais apenas assistirem
 - Opção para a sobra de um timer encerrado antes do tempo voltar ao buffer
+- **Janela flutuante (Picture-in-Picture)**: botão **PiP** no topo. Abre um mini-relógio sempre visível por cima de outros apps, com Play/Pausar e Próximo
+  - Chrome/Edge no computador: janela com botões clicáveis (Document Picture-in-Picture)
+  - Safari, iPhone/iPad e Android: janela de vídeo, com os controles de mídia do sistema fazendo Play/Pausar/Próximo
+  - Firefox não oferece PiP programável, então o botão não aparece
 - Tela não apaga enquanto o relógio corre (Wake Lock, quando suportado)
 - Funciona no celular, com a configuração numa gaveta lateral
 

@@ -257,6 +257,12 @@ input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--green); fl
 .tr .saldo { font-weight: 700; }
 .foot { display: flex; justify-content: space-between; color: var(--gray); font-size: 12px; padding-top: 6px; }
 
+/* ---------- picture-in-picture ---------- */
+.pip-btn { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 700; color: var(--fg); border-color: var(--line); }
+.pip-btn svg { width: 18px; height: 18px; }
+.pip-btn.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+.pip-video { position: fixed; right: 0; bottom: 0; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
+
 @keyframes blink { 50% { filter: brightness(1.35); } }
 @keyframes pulse { 50% { opacity: .4; } }
 
@@ -278,7 +284,7 @@ input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--green); fl
   .scrim.show { display: block; position: fixed; inset: 0; background: #0009; z-index: 45; }
   .topbar { gap: 8px; padding: 8px 10px; flex-wrap: nowrap; }
   .brand { display: none; }
-  .chip-btn .lbl { display: none; }
+  .chip-btn .lbl, .pip-btn .lbl { display: none; }
   .icon-btn { padding: 6px 7px; }
   .avatar { width: 28px; height: 28px; font-size: 11px; }
   .net span { display: none; }
