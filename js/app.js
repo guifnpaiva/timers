@@ -33,12 +33,13 @@
   const CODE_ALPHA = 'abcdefghjkmnpqrstuvwxyz23456789';
   const params = new URLSearchParams(location.search);
   // Ordem = prioridade. Todos públicos e gratuitos, sem garantia de disponibilidade.
+  // EMQX e HiveMQ são os estáveis; os demais ficam de reserva.
+  // (mqtt.eclipseprojects.io foi desligado pelos mantenedores e saiu da lista.)
   const DEFAULT_BROKERS = [
     { name: 'EMQX', url: 'wss://broker.emqx.io:8084/mqtt' },
     { name: 'HiveMQ', url: 'wss://broker.hivemq.com:8884/mqtt' },
-    { name: 'Eclipse', url: 'wss://mqtt.eclipseprojects.io:443/mqtt' },
-    { name: 'Mosquitto', url: 'wss://test.mosquitto.org:8081/mqtt' },
     { name: 'Shiftr', url: 'wss://public.cloud.shiftr.io', username: 'public', password: 'public' },
+    { name: 'Mosquitto', url: 'wss://test.mosquitto.org:8081/mqtt' },
   ];
   // ?broker=wss://a/mqtt,wss://user:senha@b  substitui a lista (útil para testes ou broker próprio)
   function parseBrokers(text) {
@@ -57,7 +58,7 @@
   }
   const CUSTOM_BROKERS = parseBrokers(params.get('broker'));
   const BROKERS = CUSTOM_BROKERS.length ? CUSTOM_BROKERS : DEFAULT_BROKERS;
-  const ACTIVE_TARGET = Math.max(1, Math.min(BROKERS.length, Number(params.get('ativos')) || 3));
+  const ACTIVE_TARGET = Math.max(1, Math.min(BROKERS.length, Number(params.get('ativos')) || 2));
   const CONNECT_TIMEOUT_MS = 8000;
   const SEED_WAIT_MS = 2500;
   const RETRY_BASE_MS = 10000;

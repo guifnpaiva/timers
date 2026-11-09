@@ -40,15 +40,14 @@ O GitHub Pages hospeda apenas arquivos estáticos, então a sincronia usa **brok
 
 ### Lista de brokers com fallback
 
-| # | Broker | Endereço |
-|---|---|---|
-| 1 | EMQX | `wss://broker.emqx.io:8084/mqtt` |
-| 2 | HiveMQ | `wss://broker.hivemq.com:8884/mqtt` |
-| 3 | Eclipse | `wss://mqtt.eclipseprojects.io:443/mqtt` |
-| 4 | Mosquitto | `wss://test.mosquitto.org:8081/mqtt` |
-| 5 | Shiftr | `wss://public.cloud.shiftr.io` (usuário/senha `public`) |
+| # | Broker | Endereço | Situação (nov/2026) |
+|---|---|---|---|
+| 1 | EMQX | `wss://broker.emqx.io:8084/mqtt` | estável |
+| 2 | HiveMQ | `wss://broker.hivemq.com:8884/mqtt` | estável |
+| 3 | Shiftr | `wss://public.cloud.shiftr.io` (usuário/senha `public`) | reserva, não verificado |
+| 4 | Mosquitto | `wss://test.mosquitto.org:8081/mqtt` | reserva, instável |
 
-- O app mantém **até 3 conectados ao mesmo tempo** e publica em todos.
+- O app mantém **até 2 conectados ao mesmo tempo** e publica em todos.
 - Se um broker não conecta, cai ou recusa a conexão, **o próximo da lista assume**. O que falhou volta a ser testado com espera crescente (10 s, 20 s, 40 s… até 5 min).
 - Quando um broker de prioridade maior volta, o app reconecta a ele e solta o de menor prioridade. Assim, todos os participantes tendem a ficar nos mesmos servidores.
 - **Ponte:** se um navegador recebe uma versão nova por um broker e outro broker ainda não a tem, ele a republica lá. Dois participantes sem nenhum servidor em comum ainda se sincronizam através de um terceiro.
