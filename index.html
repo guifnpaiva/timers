@@ -57,7 +57,7 @@
       <button id="btnCopy" class="chip-btn" title="Copiar link de convite">🔗<span class="lbl"> Convidar</span></button>
     </div>
 
-    <div id="netStatus" class="net" title=""><i></i><span></span></div>
+    <button id="netStatus" class="net" type="button" title="" aria-haspopup="true"><i></i><span></span><b></b></button>
     <div class="spacer"></div>
     <div id="peers" class="peers"></div>
     <button id="btnPip" class="icon-btn pip-btn" title="Abrir janela flutuante, Picture-in-Picture (P)" aria-label="Janela flutuante (Picture-in-Picture)" hidden>
@@ -67,6 +67,15 @@
     <button id="btnSound" class="icon-btn" title="Som dos alertas" aria-label="Som dos alertas">🔔</button>
     <button id="btnLeave" class="icon-btn text" title="Sair da sessão">Sair</button>
   </header>
+
+  <div id="netPanel" class="net-panel" hidden role="dialog" aria-label="Servidores de sincronia">
+    <div class="np-head">
+      <b>Servidores de sincronia</b>
+      <button id="btnRetry" class="chip-btn" type="button">↻ Tentar agora</button>
+    </div>
+    <ol id="netList" class="srv-list"></ol>
+    <p id="netNote" class="np-note"></p>
+  </div>
 
   <div id="scrim" class="scrim"></div>
 

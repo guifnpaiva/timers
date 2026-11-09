@@ -12,8 +12,16 @@
  * acumulou e o instante (epoch ms) em que o timer atual voltou a correr. Cada
  * navegador calcula o relógio localmente, então todos mostram o mesmo valor.
  *
- * Por redundância, o app conecta a dois brokers públicos ao mesmo tempo e publica
- * em ambos; se um cair, o outro mantém a sessão.
+ * Fallback de brokers: há uma lista de brokers públicos em ordem de prioridade.
+ * O app mantém até ACTIVE_TARGET conectados ao mesmo tempo e publica em todos.
+ * Se um falha (não conecta, cai ou recusa), ele vai para a geladeira com
+ * backoff exponencial e o próximo da lista assume. Quando um broker de maior
+ * prioridade volta, o app reconecta a ele e solta o de menor prioridade, para
+ * que todos os participantes tendam a ficar nos mesmos servidores.
+ * Cada navegador também faz "ponte": se recebe uma versão nova por um broker e
+ * outro broker ainda não a tem, republica lá (com atraso aleatório para evitar
+ * duplicatas). Assim, dois participantes sem servidor em comum ainda se
+ * sincronizam através de um terceiro.
  */
 'use strict';
 
@@ -24,11 +32,38 @@
   const TOPIC_ROOT = 'gfnp-timers/v1';
   const CODE_ALPHA = 'abcdefghjkmnpqrstuvwxyz23456789';
   const params = new URLSearchParams(location.search);
-  const BROKERS = (params.get('broker') || 'wss://broker.emqx.io:8084/mqtt,wss://broker.hivemq.com:8884/mqtt')
-    .split(',').map((s) => s.trim()).filter(Boolean);
+  // Ordem = prioridade. Todos públicos e gratuitos, sem garantia de disponibilidade.
+  const DEFAULT_BROKERS = [
+    { name: 'EMQX', url: 'wss://broker.emqx.io:8084/mqtt' },
+    { name: 'HiveMQ', url: 'wss://broker.hivemq.com:8884/mqtt' },
+    { name: 'Eclipse', url: 'wss://mqtt.eclipseprojects.io:443/mqtt' },
+    { name: 'Mosquitto', url: 'wss://test.mosquitto.org:8081/mqtt' },
+    { name: 'Shiftr', url: 'wss://public.cloud.shiftr.io', username: 'public', password: 'public' },
+  ];
+  // ?broker=wss://a/mqtt,wss://user:senha@b  substitui a lista (útil para testes ou broker próprio)
+  function parseBrokers(text) {
+    return String(text || '').split(',').map((raw) => raw.trim()).filter(Boolean).map((raw) => {
+      try {
+        const u = new URL(raw);
+        if (!/^wss?:$/.test(u.protocol)) return null;
+        const b = { name: u.port ? `${u.hostname}:${u.port}` : u.hostname };
+        if (u.username) b.username = decodeURIComponent(u.username);
+        if (u.password) b.password = decodeURIComponent(u.password);
+        u.username = ''; u.password = '';
+        b.url = u.toString();
+        return b;
+      } catch (e) { return null; }
+    }).filter(Boolean);
+  }
+  const CUSTOM_BROKERS = parseBrokers(params.get('broker'));
+  const BROKERS = CUSTOM_BROKERS.length ? CUSTOM_BROKERS : DEFAULT_BROKERS;
+  const ACTIVE_TARGET = Math.max(1, Math.min(BROKERS.length, Number(params.get('ativos')) || 3));
+  const CONNECT_TIMEOUT_MS = 8000;
+  const SEED_WAIT_MS = 2500;
+  const RETRY_BASE_MS = 10000;
+  const RETRY_MAX_MS = 300000;
   const HEARTBEAT_MS = 20000;
   const PEER_TTL_MS = 65000;
-  const JOIN_WAIT_MS = 4000;
   const R = 150;
   const CIRC = 2 * Math.PI * R;
 
@@ -216,70 +251,197 @@
       this.h = handlers;
       this.tState = `${TOPIC_ROOT}/${code}/state`;
       this.tPres = `${TOPIC_ROOT}/${code}/p/`;
-      this.clients = [];
-      this.gotState = new Set();
+      this.slots = BROKERS.map((b, i) => ({
+        i, name: b.name, url: b.url, username: b.username, password: b.password,
+        status: 'idle', // idle (reserva) | connecting | up | down
+        cl: null, fails: 0, retryAt: 0, err: '', rtt: null, gotState: false, ready: false, lastRev: 0,
+      }));
       this.presence = {};
-      this.hb = null;
+      this.timers = new Set();
       this.stopped = false;
+    }
+    later(fn, ms) {
+      const id = setTimeout(() => { this.timers.delete(id); if (!this.stopped) fn(); }, ms);
+      this.timers.add(id);
     }
     start(presence) {
       this.presence = presence;
-      if (typeof mqtt === 'undefined') { this.h.status(0, BROKERS.length); return; }
-      BROKERS.forEach((url, i) => {
-        let cl;
-        try {
-          cl = mqtt.connect(url, {
-            clientId: `tt_${this.me}_${i}_${rid(4)}`, clean: true, keepalive: 30,
-            reconnectPeriod: 4000, connectTimeout: 10000, protocolVersion: 4,
-            will: { topic: this.tPres + this.me, payload: '', retain: true, qos: 0 },
-          });
-        } catch (e) { return; }
-        cl.on('connect', () => {
-          this.gotState.delete(i);
-          cl.subscribe([this.tState, this.tPres + '+'], { qos: 1 });
-          this.pubPresence(cl);
-          setTimeout(() => { if (!this.stopped && cl.connected && !this.gotState.has(i)) this.h.seed(cl); }, 2500);
-          this.status();
-        });
-        ['close', 'offline', 'error', 'reconnect', 'end'].forEach((ev) => cl.on(ev, () => this.status()));
-        cl.on('message', (topic, payload) => {
-          const text = payload ? payload.toString() : '';
-          if (topic === this.tState) {
-            this.gotState.add(i);
-            if (!text) return;
-            try { this.h.state(JSON.parse(text), cl); } catch (e) { /* ignora lixo */ }
-          } else if (topic.startsWith(this.tPres)) {
-            const id = topic.slice(this.tPres.length);
-            let p = null;
-            if (text) { try { p = JSON.parse(text); } catch (e) { p = null; } }
-            this.h.presence(id, p);
-          }
-        });
-        this.clients.push(cl);
-      });
-      this.hb = setInterval(() => this.clients.forEach((c) => c.connected && this.pubPresence(c)), HEARTBEAT_MS);
-      this.status();
+      if (typeof mqtt === 'undefined') { this.emit(); return; }
+      this.manage();
+      this.hb = setInterval(() => this.up().forEach((sl) => this.pubPresence(sl)), HEARTBEAT_MS);
+      this.loop = setInterval(() => this.manage(), 3000);
     }
-    pubPresence(cl) {
-      cl.publish(this.tPres + this.me, JSON.stringify({ ...this.presence, ts: now() }), { retain: true, qos: 0 });
+    up() { return this.slots.filter((sl) => sl.status === 'up'); }
+    eligible(sl, t) { return sl.status === 'idle' || (sl.status === 'down' && t >= sl.retryAt); }
+
+    // Decide quais brokers devem estar conectados.
+    manage() {
+      if (this.stopped || typeof mqtt === 'undefined') return;
+      const t = Date.now();
+      const active = this.slots.filter((sl) => sl.status === 'up' || sl.status === 'connecting');
+      if (active.length < ACTIVE_TARGET) {
+        // faltam conexões: pega os próximos da lista, por prioridade
+        for (const sl of this.slots) {
+          if (active.length >= ACTIVE_TARGET) break;
+          if (this.eligible(sl, t)) { active.push(sl); this.connect(sl); }
+        }
+      } else if (!this.slots.some((sl) => sl.status === 'connecting')) {
+        // cheio: se um broker de prioridade maior pode ser testado de novo, tenta (failback)
+        const ups = this.up();
+        const worst = ups[ups.length - 1];
+        const better = worst && this.slots.find((sl) => sl.i < worst.i && this.eligible(sl, t));
+        if (better) this.connect(better);
+      }
+      // um broker melhor voltou: solta o(s) de menor prioridade
+      this.up().slice(ACTIVE_TARGET).forEach((sl) => this.release(sl));
+      this.emit();
+    }
+
+    connect(sl) {
+      sl.status = 'connecting';
+      sl.err = '';
+      sl.gotState = false;
+      sl.ready = false;
+      const t0 = Date.now();
+      let cl;
+      try {
+        cl = mqtt.connect(sl.url, {
+          clientId: `tt_${this.me}_${rid(5)}`, clean: true, keepalive: 30,
+          reconnectPeriod: 0, // reconexão é feita aqui, com fallback
+          connectTimeout: CONNECT_TIMEOUT_MS, protocolVersion: 4,
+          username: sl.username, password: sl.password,
+          will: { topic: this.tPres + this.me, payload: '', retain: true, qos: 0 },
+        });
+      } catch (e) { this.fail(sl, 'endereço inválido'); return; }
+      sl.cl = cl;
+      this.later(() => { if (sl.cl === cl && sl.status === 'connecting') this.fail(sl, 'tempo esgotado'); }, CONNECT_TIMEOUT_MS + 1500);
+      cl.on('connect', () => {
+        if (sl.cl !== cl || this.stopped) return;
+        sl.status = 'up';
+        sl.fails = 0;
+        sl.err = '';
+        sl.rtt = Date.now() - t0;
+        cl.subscribe([this.tState, this.tPres + '+'], { qos: 1 }, (err) => {
+          if (err && sl.cl === cl) this.fail(sl, 'inscrição recusada');
+        });
+        this.pubPresence(sl);
+        this.later(() => {
+          if (sl.cl !== cl || sl.status !== 'up') return;
+          sl.ready = true;
+          if (!sl.gotState) this.h.seed(sl); // broker sem o estado: semeia
+          this.emit();
+        }, SEED_WAIT_MS);
+        this.manage();
+      });
+      cl.on('error', (e) => { if (sl.cl === cl) sl.err = shortErr(e); });
+      cl.on('close', () => {
+        if (sl.cl !== cl) return;
+        this.fail(sl, sl.status === 'up' ? (sl.err || 'conexão caiu') : (sl.err || 'não conectou'));
+      });
+      cl.on('message', (topic, payload) => { if (sl.cl === cl) this.onMessage(sl, topic, payload); });
+      this.emit();
+    }
+
+    fail(sl, reason) {
+      const wasUp = sl.status === 'up';
+      const cl = sl.cl;
+      sl.cl = null;
+      if (cl) { try { cl.end(true); } catch (e) { /* noop */ } }
+      sl.status = 'down';
+      sl.err = reason;
+      sl.ready = false;
+      sl.fails = wasUp ? 1 : sl.fails + 1;
+      const backoff = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** (sl.fails - 1));
+      sl.retryAt = Date.now() + backoff * (0.8 + Math.random() * 0.4);
+      this.h.lost(sl.i);
+      if (!this.stopped) this.manage();
+    }
+
+    release(sl) { // desconexão voluntária: vira reserva
+      const cl = sl.cl;
+      sl.cl = null;
+      sl.status = 'idle';
+      sl.ready = false;
+      if (cl) {
+        try { cl.publish(this.tPres + this.me, '', { retain: true, qos: 0 }); cl.end(false); } catch (e) { /* noop */ }
+      }
+      this.h.lost(sl.i);
+    }
+
+    onMessage(sl, topic, payload) {
+      const text = payload ? payload.toString() : '';
+      if (topic === this.tState) {
+        sl.gotState = true;
+        if (!text) return;
+        let st;
+        try { st = JSON.parse(text); } catch (e) { return; }
+        if (st && Number(st.rev) > sl.lastRev) sl.lastRev = Number(st.rev);
+        this.h.state(st, sl);
+      } else if (topic.startsWith(this.tPres)) {
+        const id = topic.slice(this.tPres.length);
+        let p = null;
+        if (text) { try { p = JSON.parse(text); } catch (e) { p = null; } }
+        this.h.presence(id, p, sl.i);
+      }
+    }
+
+    pubPresence(sl) {
+      if (sl.cl && sl.status === 'up') sl.cl.publish(this.tPres + this.me, JSON.stringify({ ...this.presence, ts: now() }), { retain: true, qos: 0 });
     }
     setPresence(p) {
       this.presence = p;
-      this.clients.forEach((c) => c.connected && this.pubPresence(c));
+      this.up().forEach((sl) => this.pubPresence(sl));
     }
     publish(st, only) {
       const msg = JSON.stringify(st);
-      (only ? [only] : this.clients).forEach((c) => { if (c.connected) c.publish(this.tState, msg, { retain: true, qos: 1 }); });
+      (only ? [only] : this.up()).forEach((sl) => {
+        if (sl.cl && sl.status === 'up') {
+          sl.cl.publish(this.tState, msg, { retain: true, qos: 1 });
+          if (st.rev > sl.lastRev) sl.lastRev = st.rev;
+        }
+      });
     }
-    status() { this.h.status(this.clients.filter((c) => c.connected).length, BROKERS.length); }
+    // Ponte: leva uma versão recebida por um broker aos outros que ainda não a têm.
+    relay(st, from) {
+      this.up().forEach((sl) => {
+        if (sl === from || sl.lastRev >= st.rev) return;
+        this.later(() => {
+          if (sl.status === 'up' && sl.lastRev < st.rev) this.publish(st, sl);
+        }, 400 + Math.random() * 1200);
+      });
+    }
+    retryNow() {
+      this.slots.forEach((sl) => { if (sl.status === 'down') { sl.retryAt = 0; sl.fails = Math.max(0, sl.fails - 1); } });
+      this.manage();
+    }
+    emit() {
+      this.h.status({
+        up: this.up().length,
+        target: ACTIVE_TARGET,
+        ready: this.slots.some((sl) => sl.ready || sl.gotState),
+        slots: this.slots.map(({ i, name, url, status, err, retryAt, rtt }) => ({ i, name, url, status, err, retryAt, rtt })),
+      });
+    }
     stop() {
       this.stopped = true;
       clearInterval(this.hb);
-      this.clients.forEach((c) => {
-        try { if (c.connected) c.publish(this.tPres + this.me, '', { retain: true, qos: 0 }); c.end(false); } catch (e) { /* noop */ }
+      clearInterval(this.loop);
+      this.timers.forEach((id) => clearTimeout(id));
+      this.timers.clear();
+      this.slots.forEach((sl) => {
+        const cl = sl.cl;
+        sl.cl = null;
+        sl.status = 'idle';
+        if (cl) { try { if (cl.connected) cl.publish(this.tPres + this.me, '', { retain: true, qos: 0 }); cl.end(false); } catch (e) { /* noop */ } }
       });
-      this.clients = [];
     }
+  }
+  function shortErr(e) {
+    const m = String((e && (e.message || e.code)) || 'erro');
+    if (/not authori[sz]ed|bad user|auth/i.test(m)) return 'acesso recusado';
+    if (/timeout|timed out/i.test(m)) return 'tempo esgotado';
+    if (/refused|ECONNREFUSED/i.test(m)) return 'conexão recusada';
+    return m.length > 40 ? m.slice(0, 40) + '…' : m;
   }
 
   // ------------------------------------------------------------- sound/wake
@@ -330,7 +492,7 @@
     me: (() => { let id = store.get('tt_me'); if (!id) { id = rid(10); store.set('tt_me', id); } return id; })(),
     name: store.get('tt_name', ''),
     mode: null, code: null, state: null, sync: null, clockOffset: 0,
-    peers: new Map(), net: { up: 0, total: 0 },
+    peers: new Map(), net: { up: 0, target: 0, ready: false, slots: [] }, sessionStart: 0,
     waiting: false, waitTimer: null,
     alerted: new Set(), flashUntil: 0, toastUntil: 0, prevFinished: false,
     cfgTimer: null, cfgPending: false,
@@ -375,6 +537,7 @@
     clearTimeout(App.cfgTimer);
     App.cfgPending = false;
     App.peers.clear();
+    App.net = { up: 0, target: 0, ready: false, slots: [] };
     App.alerted.clear();
     App.mode = null;
   }
@@ -408,14 +571,13 @@
     else if (owned) { App.state = Model.newState(App.me); App.state.rev = Math.round(now()); App.state.by = App.me; }
     else App.state = Model.newState('');
     App.waiting = !cached && !owned;
-    if (App.waiting) {
-      App.waitTimer = setTimeout(() => { App.waiting = false; renderAll(); }, JOIN_WAIT_MS);
-    }
+    App.sessionStart = Date.now();
     App.sync = new Sync(code, App.me, {
       state: onRemoteState,
       presence: onPresence,
-      status: (up, total) => { App.net = { up, total }; renderNet(); },
-      seed: (cl) => { if (App.state.rev > 0) App.sync.publish(App.state, cl); },
+      status: onNetStatus,
+      lost: onBrokerLost,
+      seed: (sl) => { if (App.state.rev > 0) App.sync.publish(App.state, sl); },
     });
     App.sync.start(presence());
     showApp();
@@ -425,7 +587,7 @@
   }
 
   // ----------------------------------------------------------- state change
-  function onRemoteState(raw, cl) {
+  function onRemoteState(raw, sl) {
     const st = Model.sanitize(raw);
     if (!st) return;
     if (Model.newer(st, App.state)) {
@@ -434,16 +596,45 @@
       if (App.waiting) { App.waiting = false; clearTimeout(App.waitTimer); }
       persist();
       renderAll();
-      if (wasOwner !== (st.owner === App.me) && App.sync) App.sync.setPresence(presence());
+      if (App.sync) {
+        App.sync.relay(st, sl); // leva a versão nova aos outros brokers, se faltar
+        if (wasOwner !== (st.owner === App.me)) App.sync.setPresence(presence());
+      }
     } else if (App.state.rev > 0 && Model.newer(App.state, st)) {
-      App.sync.publish(App.state, cl); // este broker ficou com versão antiga: corrige
+      App.sync.publish(App.state, sl); // este broker ficou com versão antiga: corrige
     }
   }
-  function onPresence(id, p) {
+  // Presença é rastreada por broker: um participante só sai da lista quando
+  // nenhum dos brokers o reporta mais (ou quando o heartbeat expira).
+  function onPresence(id, p, src) {
     if (id === App.me) return;
-    if (p && typeof p === 'object') App.peers.set(id, { name: String(p.name || 'Anônimo').slice(0, 24), owner: !!p.owner, ts: Number(p.ts) || 0 });
-    else App.peers.delete(id);
+    const cur = App.peers.get(id);
+    if (p && typeof p === 'object') {
+      const ts = Number(p.ts) || 0;
+      const srcs = cur ? cur.src : new Set();
+      srcs.add(src);
+      if (!cur || ts >= cur.ts) App.peers.set(id, { name: String(p.name || 'Anônimo').slice(0, 24), owner: !!p.owner, ts, src: srcs });
+    } else if (cur) {
+      cur.src.delete(src);
+      if (!cur.src.size) App.peers.delete(id);
+    }
     renderPeers();
+  }
+  function onBrokerLost(src) {
+    App.peers.forEach((p, id) => { p.src.delete(src); if (!p.src.size) App.peers.delete(id); });
+    renderPeers();
+  }
+  function onNetStatus(net) {
+    App.net = net;
+    // Quem entra numa sessão espera o estado chegar. Se nenhum broker tiver o
+    // estado, só libera depois de ouvir 2 brokers (ou 10 s com 1), para não
+    // começar do zero por estar num servidor que o anfitrião não usa.
+    if (App.waiting && net.ready && (net.up >= Math.min(2, net.target) || Date.now() - App.sessionStart > 10000)) {
+      App.waiting = false;
+      renderAll();
+      return;
+    }
+    renderNet();
   }
   function canControl() {
     if (App.mode !== 'session') return true;
@@ -545,14 +736,44 @@
     const el = $('#netStatus');
     el.className = 'net';
     let text, title;
-    if (App.mode !== 'session') { text = 'Modo local'; title = 'Sem sincronia'; }
+    if (App.mode !== 'session') { text = 'Modo local'; title = 'Sem sincronia'; $('#netPanel').hidden = true; }
     else if (typeof mqtt === 'undefined') { el.classList.add('down'); text = 'Sem sincronia'; title = 'A biblioteca de sincronia não carregou'; }
-    else if (App.net.up === 0) { el.classList.add('down'); text = 'Conectando…'; title = 'Tentando conectar aos servidores de sincronia'; }
+    else if (App.net.up === 0) { el.classList.add('down'); text = 'Conectando…'; title = 'Tentando os servidores de sincronia da lista'; }
     else if (App.waiting) { el.classList.add('partial'); text = 'Buscando sessão…'; title = 'Conectado, aguardando o estado da sessão'; }
-    else if (App.net.up < App.net.total) { el.classList.add('partial'); text = 'Sincronizado'; title = `Conectado a ${App.net.up} de ${App.net.total} servidores`; }
-    else { el.classList.add('ok'); text = 'Sincronizado'; title = `Conectado a ${App.net.up} de ${App.net.total} servidores`; }
+    else {
+      el.classList.add(App.net.up >= Math.min(2, App.net.target) ? 'ok' : 'partial');
+      text = 'Sincronizado';
+      const names = App.net.slots.filter((x) => x.status === 'up').map((x) => x.name).join(', ');
+      title = `Conectado a ${App.net.up} servidor${App.net.up > 1 ? 'es' : ''}: ${names}`;
+    }
     $('span', el).textContent = text;
-    el.title = title;
+    $('b', el).textContent = App.mode === 'session' && App.net.slots.length ? `${App.net.up}/${App.net.target}` : '';
+    el.title = title + (App.mode === 'session' ? ' · clique para ver os servidores' : '');
+    el.disabled = App.mode !== 'session';
+    renderNetPanel();
+  }
+  function renderNetPanel() {
+    const panel = $('#netPanel');
+    if (panel.hidden) return;
+    if (App.mode !== 'session') { panel.hidden = true; return; }
+    const t = Date.now();
+    const label = {
+      up: (x) => `Conectado${x.rtt != null ? ` · ${x.rtt} ms` : ''}`,
+      connecting: () => 'Conectando…',
+      down: (x) => `Falhou${x.err ? ` (${x.err})` : ''} · nova tentativa em ${Math.max(0, Math.ceil((x.retryAt - t) / 1000))} s`,
+      idle: () => 'Reserva',
+    };
+    const host = (u) => { try { return new URL(u).host; } catch (e) { return u; } };
+    $('#netList').innerHTML = App.net.slots.map((x) => `
+      <li class="srv ${x.status}">
+        <span class="srv-n">${x.i + 1}</span>
+        <i></i>
+        <div class="srv-txt"><b>${esc(x.name)}</b><small>${esc(host(x.url))}</small></div>
+        <span class="srv-st">${esc(label[x.status](x))}</span>
+      </li>`).join('');
+    $('#netNote').textContent = typeof mqtt === 'undefined'
+      ? 'A biblioteca de sincronia não carregou.'
+      : `Usa até ${App.net.target} ao mesmo tempo. Se um falhar, o próximo da lista assume; quando um servidor de cima volta, ele é reaproveitado.${CUSTOM_BROKERS.length ? ' Lista personalizada pela URL (?broker=).' : ''}`;
   }
   function renderPeers() {
     const el = $('#peers');
@@ -862,7 +1083,7 @@
     if (App.mode === 'session') {
       if (typeof mqtt === 'undefined') msg = 'A biblioteca de sincronia não carregou. O relógio funciona, mas sem compartilhar.';
       else if (App.waiting) msg = 'Conectando à sessão e buscando o estado atual…';
-      else if (App.net.up === 0) msg = 'Sem conexão com os servidores de sincronia. O relógio continua correndo; as mudanças serão enviadas quando a conexão voltar.';
+      else if (App.net.up === 0) msg = `Sem conexão com os servidores de sincronia. Tentando os ${BROKERS.length} servidores da lista; o relógio continua correndo e as mudanças serão enviadas quando a conexão voltar.`;
       else if (App.state.rev === 0) msg = 'Sessão nova ou ainda sem dados. Configure os timers e dê Play; quem entrar verá tudo em tempo real.';
     }
     if (b.textContent !== msg) b.textContent = msg;
@@ -1300,8 +1521,25 @@
     });
 
     window.addEventListener('hashchange', route);
+    $('#netStatus').addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (App.mode !== 'session') return;
+      const panel = $('#netPanel');
+      panel.hidden = !panel.hidden;
+      renderNetPanel();
+    });
+    $('#btnRetry').addEventListener('click', () => { if (App.sync) App.sync.retryNow(); });
+    document.addEventListener('click', (e) => {
+      const panel = $('#netPanel');
+      if (!panel.hidden && !e.target.closest('#netPanel')) panel.hidden = true;
+    });
+    window.addEventListener('online', () => { if (App.sync) App.sync.retryNow(); });
     window.addEventListener('pagehide', () => { if (App.sync) App.sync.stop(); });
-    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') renderDash(); });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+      if (App.sync) App.sync.manage();
+      renderDash();
+    });
   }
   function togglePlay() {
     if (App.state.run.running) commit({ type: 'pause' });
@@ -1331,4 +1569,5 @@
   Pip.prepareVideo();
   startTicker(renderDash, 200);
   setInterval(() => { if (App.mode === 'session') renderPeers(); }, 10000);
+  setInterval(renderNetPanel, 1000);
 })();

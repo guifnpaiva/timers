@@ -120,7 +120,14 @@ input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--green); fl
   background: var(--bg); padding: 4px 10px; border-radius: 6px; color: var(--amber);
 }
 .sess-title { color: var(--muted); font-weight: 600; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.net { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
+.net {
+  display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted);
+  background: transparent; border: 1px solid transparent; border-radius: 999px; padding: 4px 10px 4px 8px;
+}
+button.net:not(:disabled):hover { background: var(--panel2); border-color: var(--line); }
+button.net:disabled { cursor: default; }
+.net b { font-size: 11px; font-weight: 800; color: var(--gray); font-variant-numeric: tabular-nums; }
+.net b:empty { display: none; }
 .net i { width: 9px; height: 9px; border-radius: 50%; background: var(--gray); box-shadow: 0 0 0 3px #47556933; }
 .net.ok i { background: var(--green); box-shadow: 0 0 0 3px #22c55e33; }
 .net.partial i { background: var(--amber); box-shadow: 0 0 0 3px #f59e0b33; }
@@ -263,6 +270,32 @@ input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--green); fl
 .pip-btn.active { background: var(--blue); border-color: var(--blue); color: #fff; }
 .pip-video { position: fixed; right: 0; bottom: 0; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
 
+/* ---------- painel de servidores ---------- */
+.net-panel {
+  position: fixed; z-index: 60; top: calc(var(--topbar) + 6px); left: 50%; transform: translateX(-50%);
+  width: min(440px, calc(100vw - 24px)); background: var(--panel); border: 1px solid var(--line);
+  border-radius: 14px; padding: 14px; box-shadow: 0 20px 50px #000a;
+}
+.np-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.srv-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.srv {
+  display: grid; grid-template-columns: 18px 10px minmax(0, 1fr) auto; align-items: center; gap: 10px;
+  background: var(--bg); border-radius: 9px; padding: 8px 10px;
+}
+.srv-n { font-size: 11px; font-weight: 800; color: var(--gray); text-align: center; }
+.srv i { width: 10px; height: 10px; border-radius: 50%; background: var(--gray); }
+.srv.up i { background: var(--green); box-shadow: 0 0 0 3px #22c55e33; }
+.srv.connecting i { background: var(--amber); animation: pulse 1s infinite; }
+.srv.down i { background: var(--red); }
+.srv-txt { min-width: 0; display: flex; flex-direction: column; }
+.srv-txt b { font-size: 14px; }
+.srv-txt small { font-size: 11px; color: var(--gray); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.srv-st { font-size: 12px; font-weight: 700; color: var(--muted); text-align: right; max-width: 190px; }
+.srv.up .srv-st { color: var(--green); }
+.srv.down .srv-st { color: var(--red); }
+.srv.connecting .srv-st { color: var(--amber); }
+.np-note { margin: 10px 2px 0; font-size: 12px; color: var(--muted); }
+
 @keyframes blink { 50% { filter: brightness(1.35); } }
 @keyframes pulse { 50% { opacity: .4; } }
 
@@ -288,6 +321,9 @@ input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--green); fl
   .icon-btn { padding: 6px 7px; }
   .avatar { width: 28px; height: 28px; font-size: 11px; }
   .net span { display: none; }
+  .net { padding: 6px; }
+  .net b { display: none; }
+  .srv-st { max-width: 140px; }
   .sess-label { display: none; }
   .dash { padding: 14px 16px 24px; gap: 16px; }
   .hero { grid-template-columns: 1fr; gap: 10px; }
