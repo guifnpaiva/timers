@@ -33,11 +33,12 @@
   const CODE_ALPHA = 'abcdefghjkmnpqrstuvwxyz23456789';
   const params = new URLSearchParams(location.search);
   // Ordem = prioridade. Todos públicos e gratuitos, sem garantia de disponibilidade.
-  // EMQX e HiveMQ são os estáveis; os demais ficam de reserva.
+  // EMQX e HiveMQ são os estáveis; FreeMQTT é a terceira opção; os demais ficam de reserva.
   // (mqtt.eclipseprojects.io foi desligado pelos mantenedores e saiu da lista.)
   const DEFAULT_BROKERS = [
     { name: 'EMQX', url: 'wss://broker.emqx.io:8084/mqtt' },
     { name: 'HiveMQ', url: 'wss://broker.hivemq.com:8884/mqtt' },
+    { name: 'FreeMQTT', url: 'wss://broker.freemqtt.com:8084/mqtt', username: 'freemqtt', password: 'public' },
     { name: 'Shiftr', url: 'wss://public.cloud.shiftr.io', username: 'public', password: 'public' },
     { name: 'Mosquitto', url: 'wss://test.mosquitto.org:8081/mqtt' },
   ];

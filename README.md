@@ -44,8 +44,9 @@ O GitHub Pages hospeda apenas arquivos estáticos, então a sincronia usa **brok
 |---|---|---|---|
 | 1 | EMQX | `wss://broker.emqx.io:8084/mqtt` | estável |
 | 2 | HiveMQ | `wss://broker.hivemq.com:8884/mqtt` | estável |
-| 3 | Shiftr | `wss://public.cloud.shiftr.io` (usuário/senha `public`) | reserva, não verificado |
-| 4 | Mosquitto | `wss://test.mosquitto.org:8081/mqtt` | reserva, instável |
+| 3 | FreeMQTT | `wss://broker.freemqtt.com:8084/mqtt` (usuário `freemqtt`, senha `public`) | terceira opção |
+| 4 | Shiftr | `wss://public.cloud.shiftr.io` (usuário/senha `public`) | reserva, não verificado |
+| 5 | Mosquitto | `wss://test.mosquitto.org:8081/mqtt` | reserva, instável |
 
 - O app mantém **até 2 conectados ao mesmo tempo** e publica em todos.
 - Se um broker não conecta, cai ou recusa a conexão, **o próximo da lista assume**. O que falhou volta a ser testado com espera crescente (10 s, 20 s, 40 s… até 5 min).
